@@ -1,0 +1,31 @@
+---
+description:
+globs:
+alwaysApply: false
+---
+# Pipeline Scripts
+
+The core pipeline logic resides primarily in the `notebooks/` and `src/` directories.
+
+**Ingestion (`notebooks/01_ingestion/`)**
+
+*   [`00_youtube_ingestion.py`](mdc:notebooks/01_ingestion/00_youtube_ingestion.py): Reads local watch history JSONs (`data/watch_history/`), aggregates channel view counts, and populates the `channels` table in the SQLite DB.
+*   [`01_youtube_video_download.py`](mdc:notebooks/01_ingestion/01_youtube_video_download.py): Fetches video metadata (title, duration) via YouTube API for channels in the DB, filters by duration, avoids duplicates, and populates the `processed_videos` table. *Does not download video files.*
+
+**Transcription (`notebooks/02_transcription/`)**
+
+*   [`00_gemini_transcription.py`](mdc:notebooks/02_transcription/00_gemini_transcription.py): Uses the Gemini API (async) to transcribe videos listed in `processed_videos` directly via YouTube URLs. Updates the `transcriptions` table.
+
+**Classification (`notebooks/03_classification/`)**
+
+*   [`00_llm_classification.py`](mdc:notebooks/03_classification/00_llm_classification.py): Uses the Gemini API (async, JSON mode) to classify transcriptions based on defined criteria (language, coherence, etc.). Populates the `classifications` table.
+
+**Library Enhancement (`src/`)**
+
+*   [`library_enhancer.py`](mdc:src/library_enhancer.py): Orchestrates the process of finding new channels. Selects high-rated channels, calls Perplexity API for similar channels, normalizes the results using Gemini API, and inserts new channels into the `channels` table. Logs API requests/responses to `perplexity_requests` and `gemini_normalization_requests` tables.
+
+**Utilities (`src/`)**
+
+*   [`db_utils.py`](mdc:src/db_utils.py): Handles SQLite database connection and schema initialization.
+*   [`perplexity_client.py`](mdc:src/perplexity_client.py): Wrapper for calling the Perplexity API (async, with retries).
+*   [`llm_utils.py`](mdc:src/llm_utils.py): Helper for calling the Gemini API for normalization (async, JSON mode).

@@ -1,0 +1,17 @@
+---
+description:
+globs:
+alwaysApply: false
+---
+# Database Schema
+
+The project uses a local SQLite database located at `data/youtube_deslopify.db`. The schema and connection logic are defined in [`src/db_utils.py`](mdc:src/db_utils.py).
+
+**Key Tables:**
+
+*   `channels`: Information about YouTube channels (name, URL, view count). Populated by ingestion and library enhancer.
+*   `processed_videos`: Metadata for videos selected for processing (ID, channel info, title, duration). Links to `channels`.
+*   `transcriptions`: Stores Gemini API transcription results (text, status, errors). Links to `processed_videos`.
+*   `classifications`: Stores Gemini API classification results (scores, reasoning, status, errors). Links to `processed_videos` and `transcriptions`.
+*   `perplexity_requests`: Logs requests to Perplexity API during library enhancement (seed channel, prompt, response, status). Links to `channels`.
+*   `gemini_normalization_requests`: Logs requests to Gemini API for normalizing Perplexity output (raw response, parsed count, status). Links to `perplexity_requests`.

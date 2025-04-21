@@ -134,9 +134,10 @@ def update_gemini_request_end(
 # --- Main Logic ---
 
 def get_seed_channels(conn: sqlite3.Connection) -> list[tuple[str, str]]:
-    """Fetches distinct high-quality channels from the classifications table."""
+    """Fetches distinct high-quality channels that haven't been used as seeds yet."""
     cursor = conn.cursor()
     try:
+        # Select high-rated channels that do NOT appear in perplexity_requests
         cursor.execute("""
             SELECT DISTINCT pv.channel_name, pv.channel_url
             FROM classifications c
@@ -145,11 +146,15 @@ def get_seed_channels(conn: sqlite3.Connection) -> list[tuple[str, str]]:
               AND c.status = 'success'
               AND pv.channel_name IS NOT NULL
               AND pv.channel_url IS NOT NULL
+              AND pv.channel_url NOT IN (
+                  SELECT DISTINCT seed_channel_url 
+                  FROM perplexity_requests
+              )
             ORDER BY pv.channel_name -- Optional: for consistent ordering if limiting
         """)
         seeds = cursor.fetchall()
         valid_seeds = [(name, url) for name, url in seeds if name and url]
-        logger.info(f"Found {len(valid_seeds)} unique, high-quality seed channels in the database.")
+        logger.info(f"Found {len(valid_seeds)} unique, high-quality seed channels in the database that have not been searched by Perplexity yet.")
         return valid_seeds
     except sqlite3.Error as e:
         logger.error(f"Database error fetching seed channels: {e}")
@@ -313,7 +318,7 @@ async def process_single_seed_channel(
 
 async def run_library_enhancer():
     """Main orchestration function for the library enhancer process."""
-    logger.info("=== Starting Library Enhancer Process ===")
+    logger.info("=== Starting Library Enhancer Process ===") # Removed test mode indicator
     try:
         initialize_database()
     except Exception as e:
@@ -330,15 +335,16 @@ async def run_library_enhancer():
             logger.info("No high-quality seed channels found to process. Exiting.")
             return
 
+        # --- REVERTED TEST MODIFICATION: Apply the MAX_REQUESTS_PER_RUN limit --- 
         seeds_to_process = seed_channels[:MAX_REQUESTS_PER_RUN]
         if len(seed_channels) > MAX_REQUESTS_PER_RUN:
-            logger.warning(f"Processing limit hit: Found {len(seed_channels)} seeds, but will only process the first {MAX_REQUESTS_PER_RUN} due to MAX_REQUESTS_PER_RUN setting.")
+            logger.warning(f"Processing limit hit: Found {len(seed_channels)} eligible seeds, but will only process the first {MAX_REQUESTS_PER_RUN} due to MAX_REQUESTS_PER_RUN setting.")
+        # --- END REVERTED TEST MODIFICATION ---
 
         logger.info(f"Starting async processing for {len(seeds_to_process)} seed channels with concurrency {MAX_CONCURRENT_API_CALLS}.")
         semaphore = asyncio.Semaphore(MAX_CONCURRENT_API_CALLS)
         tasks = []
         for name, url in seeds_to_process:
-            # Pass the connection object to the task
             tasks.append(process_single_seed_channel(name, url, semaphore, conn))
 
         results = await asyncio.gather(*tasks, return_exceptions=True)
@@ -347,12 +353,12 @@ async def run_library_enhancer():
         successful_tasks = 0
         failed_tasks = 0
         for i, result in enumerate(results):
-            seed_name = seeds_to_process[i][0]
+            # Handle potential index error if seeds_to_process is empty (though unlikely here)
+            seed_name = seeds_to_process[i][0] if i < len(seeds_to_process) else "Unknown Seed"
             if isinstance(result, Exception):
                 logger.error(f"Task for seed channel '{seed_name}' ultimately failed with exception: {result}", exc_info=result)
                 failed_tasks += 1
             elif isinstance(result, list):
-                # We still count the task as successful if it ran, even if it found 0 channels
                 successful_tasks += 1
                 all_new_channel_candidates.extend(result)
             else:
@@ -364,11 +370,11 @@ async def run_library_enhancer():
 
         if all_new_channel_candidates:
              logger.info("Inserting collected channel candidates into the database...")
-             # Use the same connection for insertion
              total_new_channels_added = insert_new_channels(conn, all_new_channel_candidates)
              logger.info(f"Total new unique channels inserted in this run: {total_new_channels_added}")
         else:
              logger.info("No new channel candidates to insert into the database.")
+
 
     except sqlite3.Error as e:
         logger.exception(f"A database error occurred during the main process: {e}")
@@ -381,7 +387,7 @@ async def run_library_enhancer():
                 logger.info("Database connection closed.")
             except sqlite3.Error as e:
                  logger.error(f"Error closing database connection: {e}")
-        logger.info(f"=== Library Enhancer Process Finished. Added {total_new_channels_added} new channels. ===")
+        logger.info(f"=== Library Enhancer Process Finished. Added {total_new_channels_added} new channels. ===") # Removed test mode indicator
 
 if __name__ == "__main__":
     try:

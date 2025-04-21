@@ -1,0 +1,24 @@
+---
+description:
+globs:
+alwaysApply: false
+---
+# Authentication Methods
+
+Authentication for the YouTube Data API is handled in [`notebooks/00_setup_and_auth/`](mdc:notebooks/00_setup_and_auth/).
+
+**1. Local OAuth:**
+
+*   Script: [`00_youtube_oauth_local.py`](mdc:notebooks/00_setup_and_auth/00_youtube_oauth_local.py)
+*   Requires: [`client_secrets.json`](mdc:notebooks/00_setup_and_auth/client_secrets.json) from Google Cloud Console.
+*   Output: Creates/updates [`token.json`](mdc:notebooks/00_setup_and_auth/token.json) with OAuth credentials.
+*   Usage: Run locally once to authorize the application via browser flow.
+
+**2. Databricks OAuth:**
+
+*   Script: [`youtube_auth_and_fetch.py`](mdc:notebooks/00_setup_and_auth/youtube_auth_and_fetch.py)
+*   Requires: Azure Key Vault secrets (`youtube-client-id`, `youtube-client-secret`) accessible via `DefaultAzureCredential` (Managed Identity).
+*   Output: Stores refresh token in a notebook-scoped variable (`saved_refresh_token`) for use in subsequent notebook cells or `%run` commands.
+*   Usage: Run within a Databricks environment.
+
+Gemini and Perplexity API authentication relies on API keys set as environment variables (`GEMINI_API_KEY`, `PERPLEXITY_API_KEY`), typically loaded from a `[.env](mdc:.env)` file.

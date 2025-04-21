@@ -1,0 +1,33 @@
+---
+description:
+globs:
+alwaysApply: false
+---
+# Configuration & Key Files
+
+**Environment Variables:**
+
+*   API keys (`GEMINI_API_KEY`, `PERPLEXITY_API_KEY`) are loaded from the `[.env](mdc:.env)` file in the project root using `python-dotenv`.
+
+**Data Files:**
+
+*   Input YouTube watch history JSON files are expected in the `data/watch_history/` directory.
+*   The SQLite database is stored at `data/youtube_deslopify.db` (defined in [`src/db_utils.py`](mdc:src/db_utils.py)).
+
+**Dependencies:**
+
+*   Python package dependencies are listed in [`requirements.txt`](mdc:requirements.txt).
+
+**Authentication Files:**
+
+*   Local YouTube OAuth requires [`notebooks/00_setup_and_auth/client_secrets.json`](mdc:notebooks/00_setup_and_auth/client_secrets.json).
+*   Local YouTube OAuth generates [`notebooks/00_setup_and_auth/token.json`](mdc:notebooks/00_setup_and_auth/token.json).
+
+**Documentation:**
+
+*   High-level overview and setup: [`README.md`](mdc:README.md)
+*   Detailed technical description: [`TECHNICAL_DOCUMENTATION.md`](mdc:TECHNICAL_DOCUMENTATION.md)
+
+**Script Parameters:**
+
+*   Constants controlling behavior (e.g., API model names, concurrency limits, request limits like `MAX_REQUESTS_PER_RUN`) are generally defined near the top of individual script files.

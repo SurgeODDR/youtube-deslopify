@@ -22,11 +22,31 @@ HEADERS = {
     "Accept": "application/json", # Added Accept header
 }
 
+# Helper to decide which exceptions should trigger a retry
+def _is_retryable_http_error(exc: Exception) -> bool:  # pragma: no cover
+    """Return True if *exc* is an httpx.HTTPStatusError with a retry‑worthy status.
+
+    We currently retry on 429 (rate‑limit) and the most common transient 5xx errors.
+    This helper can easily be extended with additional logic (e.g. inspect
+    ``Retry‑After`` headers) without touching the tenacity decorator below.
+    """
+    if isinstance(exc, httpx.HTTPStatusError):
+        return exc.response is not None and exc.response.status_code in {429, 500, 502, 503, 504}
+    return False
+
 @tenacity.retry(
-    wait=tenacity.wait_exponential(multiplier=1, min=2, max=30),
-    stop=tenacity.stop_after_attempt(6),
-    retry=tenacity.retry_if_exception_type((httpx.HTTPStatusError, httpx.TimeoutException)), # Retry on server errors and timeouts
-    reraise=True
+    # Retry on HTTP status errors that are considered transient as well as timeouts
+    retry=(
+        tenacity.retry_if_exception(_is_retryable_http_error)
+        | tenacity.retry_if_exception_type(httpx.TimeoutException)
+    ),
+    # Apply exponential back‑off with full jitter to prevent thundering‑herd
+    wait=tenacity.wait_random_exponential(multiplier=2, max=60),
+    # Give it a couple more chances before giving up
+    stop=tenacity.stop_after_attempt(8),
+    # Log each retry
+    before_sleep=tenacity.before_sleep_log(logger, logging.WARNING),
+    reraise=True,
 )
 async def deep_research(prompt: str, max_tokens=8000) -> str | None:
     """
@@ -71,19 +91,32 @@ async def deep_research(prompt: str, max_tokens=8000) -> str | None:
                  return None # Or handle no choices case
 
     except httpx.HTTPStatusError as e:
-        logger.error(f"HTTP error calling Perplexity API for prompt '{prompt[:50]}...': {e.response.status_code} - {e.response.text}", exc_info=True)
-        # Specific handling for 401 Unauthorized
-        if e.response.status_code == 401:
-             logger.error("Perplexity API key might be invalid or expired.")
-        # Specific handling for 429 Too Many Requests (though tenacity should handle retries)
-        elif e.response.status_code == 429:
-             logger.warning("Perplexity API rate limit hit (status 429).")
-        # Re-raise after logging might be handled by tenacity depending on config
-        # For now, return None to signal failure after retries
-        return None
+        status_code = e.response.status_code if e.response else None
+        logger.warning(
+            "HTTP error %s from Perplexity for prompt '%s…': %s",
+            status_code if status_code is not None else "<no‑response>",
+            prompt[:50],
+            e,
+            exc_info=True,
+        )
+
+        # If this status code is considered transient, bubble the error up so that
+        # the retry decorator can kick in. Otherwise, treat it as permanent and
+        # return None so the caller can handle the failure gracefully.
+        if _is_retryable_http_error(e):
+            raise  # Retryable – hand control back to tenacity
+        else:
+            if status_code == 401:
+                logger.error("Perplexity API key might be invalid or expired.")
+            return None
     except httpx.TimeoutException as e:
-        logger.error(f"Timeout calling Perplexity API for prompt '{prompt[:50]}...': {e}", exc_info=True)
-        return None # Signal failure after retries
+        logger.warning(
+            "Timeout when calling Perplexity for prompt '%s…': %s",
+            prompt[:50],
+            e,
+            exc_info=True,
+        )
+        raise  # Hand control back to tenacity
     except Exception as e:
         logger.error(f"Unexpected error calling Perplexity API for prompt '{prompt[:50]}...': {e}", exc_info=True)
         return None # Signal failure 
