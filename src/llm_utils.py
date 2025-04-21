@@ -5,7 +5,7 @@ import json
 import logging
 from dotenv import load_dotenv
 from pydantic import BaseModel, Field, HttpUrl, ValidationError, TypeAdapter
-from typing import List
+from typing import List, Tuple, Optional
 
 load_dotenv() # Load environment variables from .env
 
@@ -54,7 +54,7 @@ Analyze the research text provided below. Your goal is to extract high-quality Y
 
 # Removed parse_gemini_json_list_output function as SDK handles parsing with response_schema
 
-async def flash_normalise_channel_list(deep_research_text: str) -> list[dict]:
+async def flash_normalise_channel_list(deep_research_text: str) -> Tuple[List[dict], Optional[str], Optional[str]]:
     """
     Uses Gemini Flash with JSON mode to extract a list of channel dictionaries from raw text.
 
@@ -62,17 +62,23 @@ async def flash_normalise_channel_list(deep_research_text: str) -> list[dict]:
         deep_research_text: The raw text output from Perplexity Deep Research.
 
     Returns:
-        A list of dictionaries, e.g., [{"channel_name": "...": "channel_url": "..."}],
-        or an empty list if no channels are found or an error occurs.
+        A tuple containing:
+        - list[dict]: List of successfully parsed channel data (e.g., [{"channel_name": "...", "channel_url": "..."}]). Empty if none found or error.
+        - Optional[str]: The raw response text received from the Gemini API.
+        - Optional[str]: An error message if any part of the process failed (API call, parsing, validation).
     """
     if not deep_research_text:
         logger.warning("Input text for normalization is empty.")
-        return []
+        return [], None, "Input text was empty."
     if not GEMINI_API_KEY:
         logger.error("Cannot call Gemini API: API key is missing.")
-        return []
+        return [], None, "Gemini API key is missing."
 
     prompt = SYSTEM_PROMPT_TEMPLATE.format(deep_research_text=deep_research_text)
+    response_text: Optional[str] = None
+    error_message: Optional[str] = None
+    parsed_channel_list: List[dict] = []
+
     try:
         model = genai.GenerativeModel(MODEL_NAME)
         response = await model.generate_content_async(
@@ -90,36 +96,44 @@ async def flash_normalise_channel_list(deep_research_text: str) -> list[dict]:
         if not response.candidates:
              if response.prompt_feedback.block_reason:
                   block_reason = response.prompt_feedback.block_reason.name
+                  error_message = f"Response blocked. Reason: {block_reason}"
                   logger.warning(f"Gemini response blocked during normalization. Reason: {block_reason}")
-                  return []
              else:
+                  error_message = f"Response missing candidates. Feedback: {response.prompt_feedback}"
                   logger.warning(f"Gemini response missing candidates during normalization. Feedback: {response.prompt_feedback}")
-                  return []
+             # Return empty list, no response text, and the error
+             return [], None, error_message
         
-        # Access the response text which should contain the JSON string
-        response_text = response.text
-        logger.debug(f"Gemini response text (expecting JSON): {response_text}")
+        # Try to get the response text
+        try:
+            response_text = response.text
+            logger.debug(f"Gemini response text (expecting JSON): {response_text}")
+        except ValueError as e:
+            # Handle potential errors if response.text is accessed when blocked (should be caught above, but defensive)
+            error_message = f"Value error accessing response text (likely blocked): {e}"
+            logger.warning(f"{error_message}. Feedback: {getattr(response, 'prompt_feedback', 'N/A')}")
+            return [], None, error_message # No response text available
 
-        # Parse the JSON string using the Pydantic TypeAdapter
-        validated_channels = ChannelListAdapter.validate_json(response_text)
-        
-        # Convert Pydantic models back to dictionaries for compatibility with downstream DB insert
-        channel_list_dicts = [channel.model_dump() for channel in validated_channels]
-        
-        logger.info(f"Successfully parsed and validated {len(channel_list_dicts)} channels using JSON mode.")
-        return channel_list_dicts
+        # Parse and validate the JSON string using the Pydantic TypeAdapter
+        try:
+            validated_channels = ChannelListAdapter.validate_json(response_text)
+            # Convert Pydantic models back to dictionaries
+            parsed_channel_list = [channel.model_dump(mode='json') for channel in validated_channels] # Use mode='json' for HttpUrl serialization
+            logger.info(f"Successfully parsed and validated {len(parsed_channel_list)} channels using JSON mode.")
+        except json.JSONDecodeError as e:
+            error_message = f"Failed to decode JSON response: {e}. Response text: {response_text[:500]}"
+            logger.error(error_message)
+            # Keep response_text for logging
+        except ValidationError as e:
+            error_message = f"Pydantic validation failed: {e}. Response text: {response_text[:500]}"
+            logger.error(error_message)
+            # Keep response_text for logging
 
-    except json.JSONDecodeError as e:
-        logger.error(f"Failed to decode JSON from Gemini response text: {e}. Response text: {response_text[:500]}")
-        return []
-    except ValidationError as e:
-        logger.error(f"Pydantic validation failed for Gemini JSON response: {e}. Response text: {response_text[:500]}")
-        return []
-    except ValueError as e:
-         # Catch potential errors if response.text is accessed when blocked
-         logger.warning(f"Value error accessing Gemini response (likely blocked): {e}. Feedback: {getattr(response, 'prompt_feedback', 'N/A')}")
-         return []
     except Exception as e:
         # Catch potential API errors (rate limits, etc.) or other unexpected issues
-        logger.error(f"Unexpected error during Gemini normalization with JSON mode: {e}", exc_info=True)
-        return [] 
+        error_message = f"Unexpected error during Gemini normalization: {e}"
+        logger.error(error_message, exc_info=True)
+        # response_text might be None if the error occurred before getting the response
+
+    # Return the parsed list (empty if error), the raw text (if available), and any error message
+    return parsed_channel_list, response_text, error_message 
