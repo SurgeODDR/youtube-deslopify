@@ -80,7 +80,7 @@ The project aims to identify potentially low-quality ("slop") YouTube content wa
     -   Selects "seed" channels from the database where `classifications.overall_score >= 4`.
     -   Limits the number of seeds processed per run based on `MAX_REQUESTS_PER_RUN` (default: 20) to control API costs.
     -   For each selected seed channel, it calls the Perplexity Deep Research API (`sonar-deep-research`) using `src/perplexity_client.py` to find similar educational channels.
-    -   The raw text output from Perplexity is then processed by the Gemini Flash API (`gemini-1.5-flash-latest`) using `src/llm_utils.py` to extract a structured list of channel names and URLs.
+    -   The raw text output from Perplexity is then processed by the Gemini Flash API (`gemini-2.5-flash-preview-04-17`) using `src/llm_utils.py` to extract a structured list of channel names and URLs.
     -   These newly discovered channels are inserted into the `channels` table (`views` set to 0), avoiding duplicates based on URL (`ON CONFLICT DO NOTHING`).
 -   **Dependencies:** Uses `src/db_utils.py`, `src/perplexity_client.py`, `src/llm_utils.py`.
 -   **Concurrency:** Uses `asyncio` with a semaphore (`MAX_CONCURRENT_API_CALLS`) to manage concurrent calls to both Perplexity and Gemini APIs.
