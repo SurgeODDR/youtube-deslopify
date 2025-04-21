@@ -1,5 +1,12 @@
-google-auth-oauthlib>=0.4.6
-google-auth>=2.6.0
-google-api-python-client>=2.0.0
-azure-identity>=1.12.0
-azure-keyvault-secrets>=4.7.0 
+# Core libraries for YouTube Data API and Gemini API
+google-api-python-client
+google-auth-httplib2
+google-auth-oauthlib
+google-generativeai
+python-dotenv
+
+# Note: 
+# - Ensure ffmpeg is installed separately on your system if not already present.
+#   (Needed by pydub, though pydub is removed, ffmpeg might be useful generally)
+# - yt-dlp is no longer required by the core metadata/transcription/classification pipeline.
+# - pydub is no longer required by the core pipeline. 
