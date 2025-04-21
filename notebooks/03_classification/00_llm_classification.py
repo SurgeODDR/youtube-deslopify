@@ -13,6 +13,8 @@ import functools
 
 import google.generativeai as genai
 from google.api_core import exceptions as google_exceptions
+from pydantic import BaseModel, Field, ValidationError, TypeAdapter
+from typing import Optional
 
 # Load environment variables from .env file
 load_dotenv()
@@ -35,47 +37,43 @@ except ImportError:
 
 # --- Configuration ---
 GEMINI_API_KEY = os.environ.get("GEMINI_API_KEY")
-MODEL_NAME = "gemini-2.5-flash-preview-04-17"
+MODEL_NAME = "gemini-1.5-pro-latest" # Use latest Pro model
 MAX_CONCURRENT_TASKS = 50
 API_RETRY_DELAY = 5
 # ---
 
+# --- Pydantic Schema Definition for Classification --- (Aligns with DB table)
+class ClassificationResult(BaseModel):
+    language_detected: str = Field(description="Primary language detected (e.g., 'English', 'Czech', 'Dutch', 'Other')")
+    language_score: int = Field(description="0 if language is Other, 1 if English/Czech/Dutch")
+    coherence_score: int = Field(ge=0, le=5, description="Rating (0-5) for logical flow and sense")
+    educational_score: int = Field(ge=0, le=5, description="Rating (0-5) for teaching value or skill development")
+    engagement_score: int = Field(ge=0, le=5, description="Rating (0-5) assessing engagement quality (Substance vs. Sensory Overload)")
+    appropriateness_score: int = Field(ge=0, le=5, description="Rating (0-5) for constructive themes vs. low-value activities")
+    overall_score: int = Field(ge=0, le=5, description="Holistic quality score (0-5)")
+    reasoning: str = Field(description="Brief textual explanation for the scores")
+
+# --- Updated Prompt for JSON Mode ---
 CLASSIFICATION_PROMPT_TEMPLATE = """
-Analyze the following YouTube video transcription to assess its suitability and quality for children.
+Analyze the following YouTube video transcription to assess its suitability and quality for children based on the criteria below. 
+Return your analysis as a JSON object conforming to the provided schema.
 
 **Transcription:**
 ```
 {transcription_text}
 ```
 
-**Evaluation Criteria:**
+**Evaluation Criteria & Instructions:**
 
-1.  **Language:** Identify the primary language. Is it English, Czech, or Dutch?
-2.  **Coherence:** Does the content make sense? Does it follow a logical progression or tell a story? (Rate 1-5: 1=Nonsensical/Random, 5=Very Coherent/Structured)
-3.  **Educational Value:** Does the content aim to teach something specific, encourage curiosity, or develop skills? (Rate 1-5: 1=None, 5=Highly Educational)
-4.  **Engagement Quality:** How does the content engage the child? Is it through a compelling narrative/topic, or primarily through excessive bright colors, fast cuts, repetitive sounds, or sensory overload (often associated with "slop" content)? (Rate 1-5: 1=Likely Low-Quality/Hypnotic Engagement, 5=Engaging through Substance/Story)
-5.  **Content Appropriateness:** Does the content focus on desirable themes? Avoid evaluating content solely focused on things like playing with slime, repetitive unboxing, or other potentially low-value/mindless activities. (Rate 1-5: 1=Likely Low-Value/"Slop" Content, 5=Appropriate & Constructive Themes)
-6.  **Overall Quality:** Based on all the above, provide a holistic quality score. (Rate 1-5: 1=Very Poor Quality/Slop, 5=High Quality)
-
-**Instructions:**
-
-*   First, determine the language. If it is NOT English, Czech, or Dutch, stop evaluation and set all scores to 0, except `language_score` which should be 0.
-*   If the language IS English, Czech, or Dutch, set `language_score` to 1 and proceed to evaluate and score all other criteria (1-5).
-*   Provide a brief reasoning for your scores.
-*   Output your analysis STRICTLY in the following JSON format:
-
-```json
-{{
-  "language_detected": "string (e.g., 'English', 'Czech', 'Dutch', 'Other')",
-  "language_score": "integer (0 or 1)",
-  "coherence_score": "integer (0-5)",
-  "educational_score": "integer (0-5)",
-  "engagement_score": "integer (0-5)",
-  "appropriateness_score": "integer (0-5)",
-  "overall_score": "integer (0-5)",
-  "reasoning": "string (brief explanation)"
-}}
-```
+1.  **Language Detection:** Identify the primary language. Set `language_detected` to the language name (e.g., 'English', 'Czech', 'Dutch', 'Other'). Set `language_score` to 1 if the detected language is English, Czech, or Dutch, otherwise set it to 0.
+2.  **Stop if Not Target Language:** If `language_score` is 0, set all other score fields (`coherence_score`, `educational_score`, `engagement_score`, `appropriateness_score`, `overall_score`) to 0 and provide a brief `reasoning` indicating the language mismatch. Do not evaluate further.
+3.  **Evaluate if Target Language:** If `language_score` is 1, proceed to evaluate the following criteria and assign scores from 1 to 5:
+    *   `coherence_score`: Does the content make sense and follow a logical progression? (1=Nonsensical, 5=Very Coherent)
+    *   `educational_score`: Does it aim to teach, encourage curiosity, or develop skills? (1=None, 5=Highly Educational)
+    *   `engagement_score`: How does it engage? Through compelling narrative/topic (high score) or primarily through excessive sensory stimulation (low score)? (1=Likely Low-Quality/Hypnotic, 5=Engaging through Substance)
+    *   `appropriateness_score`: Does it focus on desirable themes? Avoid rating highly content focused solely on low-value activities (e.g., slime, repetitive unboxing). (1=Likely Low-Value/"Slop", 5=Appropriate & Constructive)
+    *   `overall_score`: Your holistic quality assessment based on all criteria. (1=Very Poor/Slop, 5=High Quality)
+4.  **Reasoning:** Provide a concise `reasoning` explaining your scores.
 """
 
 def configure_gemini():
@@ -111,9 +109,7 @@ def get_pending_transcriptions(conn):
 
 def update_classification_status(
     video_id, transcription_id, status, 
-    language_detected=None, language_score=None, coherence_score=None, 
-    educational_score=None, engagement_score=None, appropriateness_score=None, 
-    overall_score=None, reasoning=None,
+    classification_data: Optional[dict] = None, # Pass the dict here
     model_used=None, processing_time=None, error_message=None
 ):
     """Inserts or updates classification status in DB (connects internally)."""
@@ -122,7 +118,22 @@ def update_classification_status(
         conn = get_db_connection()
         cursor = conn.cursor()
         now = datetime.now()
-        
+
+        # Prepare data for insertion/update
+        # Start with default None or 0 values matching the schema
+        data_to_insert = {
+            'language_detected': None,
+            'language_score': 0,
+            'coherence_score': 0,
+            'educational_score': 0,
+            'engagement_score': 0,
+            'appropriateness_score': 0,
+            'overall_score': 0,
+            'reasoning': None
+        }
+        if classification_data: # If valid data was parsed
+            data_to_insert.update(classification_data)
+
         cursor.execute("""
             INSERT INTO classifications (
                 video_id, transcription_id, 
@@ -148,8 +159,8 @@ def update_classification_status(
         """, (
             video_id,
             transcription_id,
-            language_detected, language_score, coherence_score, educational_score,
-            engagement_score, appropriateness_score, overall_score, reasoning,
+            data_to_insert['language_detected'], data_to_insert['language_score'], data_to_insert['coherence_score'], data_to_insert['educational_score'],
+            data_to_insert['engagement_score'], data_to_insert['appropriateness_score'], data_to_insert['overall_score'], data_to_insert['reasoning'],
             model_used, processing_time, status, error_message, now
         ))
         conn.commit()
@@ -159,84 +170,78 @@ def update_classification_status(
         if conn:
             conn.close()
 
-def parse_gemini_json_output(text_output: str) -> (dict | None, str | None):
-    """Attempts to parse JSON from the Gemini output, handling potential markdown/extra text."""
-    try:
-        # Find the first '{' and the last '}' to extract the JSON block
-        start_brace = text_output.find('{')
-        end_brace = text_output.rfind('}')
-        
-        if start_brace == -1 or end_brace == -1 or end_brace < start_brace:
-            return None, f"Could not find valid JSON braces in response: {text_output[:500]}"
-            
-        json_text = text_output[start_brace : end_brace + 1]
-        
-        # Parse the extracted text
-        parsed_json = json.loads(json_text)
-        
-        # Basic validation (check for expected keys)
-        expected_keys = ["language_detected", "language_score", "coherence_score", "educational_score", 
-                         "engagement_score", "appropriateness_score", "overall_score", "reasoning"]
-        if all(key in parsed_json for key in expected_keys):
-            return parsed_json, None
-        else:
-            missing = [key for key in expected_keys if key not in parsed_json]
-            return None, f"Parsed JSON missing expected keys: {missing}"
-            
-    except json.JSONDecodeError as e:
-        # Include the attempted parse string in the error for debugging
-        return None, f"Failed to decode JSON response: {e}. Attempted to parse: {json_text[:500]}"
-    except Exception as e:
-        return None, f"Unexpected error parsing JSON: {e}"
-
 async def classify_transcription_gemini_async(transcription_text: str):
-    """Classifies a transcription using the Gemini API (async)."""
+    """Classifies a transcription using the Gemini API with JSON mode (async)."""
     start_time = time.time()
     if not transcription_text:
         return None, "Transcription text is empty.", 0
+    
+    classification_result = None # Initialize
+    error_message = None
+    processing_time = 0
+
     try:
         prompt = CLASSIFICATION_PROMPT_TEMPLATE.format(transcription_text=transcription_text)
         logger.info(f"Generating classification...")
         model = genai.GenerativeModel(MODEL_NAME)
-        response = await model.generate_content_async(prompt)
+        response = await model.generate_content_async(
+            prompt,
+            generation_config=genai.types.GenerationConfig(
+                response_schema=ClassificationResult,
+                response_mime_type="application/json",
+            )
+        )
         processing_time = time.time() - start_time
-        
-        try:
-            response_text = response.text
-        except ValueError as e:
-            logger.warning(f"Response likely blocked. Feedback: {response.prompt_feedback}. Error: {e}")
-            block_reason_msg = getattr(response.prompt_feedback, 'block_reason', 'Unknown')
-            return None, f"Response likely blocked. Reason: {block_reason_msg}", processing_time
-        except Exception as e:
-             logger.error(f"Error accessing response text: {e}", exc_info=True)
-             return None, f"Error accessing response text: {e}", processing_time
+        logger.debug(f"Raw Gemini classification response object: {response}")
 
-        if not response_text:
+        if not response.candidates:
              if response.prompt_feedback.block_reason:
-                  logger.warning(f"Response blocked. Reason: {response.prompt_feedback.block_reason}")
-                  return None, f"Response blocked. Reason: {response.prompt_feedback.block_reason}", processing_time
+                  block_reason = response.prompt_feedback.block_reason.name
+                  error_message = f"Response blocked. Reason: {block_reason}"
+                  logger.warning(f"Classification response blocked. Reason: {block_reason}")
              else:
-                  logger.warning(f"Response empty but not blocked. Feedback: {response.prompt_feedback}")
-                  return None, f"Response was empty. Feedback: {response.prompt_feedback}", processing_time
+                  error_message = f"Response missing candidates. Feedback: {response.prompt_feedback}"
+                  logger.warning(f"Classification response missing candidates. Feedback: {response.prompt_feedback}")
+             return None, error_message, processing_time
 
-        parsed_data, parse_error = parse_gemini_json_output(response_text)
-        if parse_error:
-            logger.error(f"Error parsing classification JSON: {parse_error}")
-            return None, parse_error, processing_time
+        # Access the response text which should contain the JSON string
+        response_text = response.text
+        logger.debug(f"Gemini classification response text (expecting JSON): {response_text}")
+        
+        # Parse and validate using the Pydantic model
+        validated_result = ClassificationResult.model_validate_json(response_text)
+        # Convert the validated Pydantic model to a dictionary
+        classification_result = validated_result.model_dump()
+        logger.info(f"Classification successful and validated in {processing_time:.2f}s.")
 
-        logger.info(f"Classification successful in {processing_time:.2f}s.")
-        return parsed_data, None, processing_time
-
+    except json.JSONDecodeError as e:
+         processing_time = time.time() - start_time
+         error_message = f"Failed to decode JSON response: {e}. Response text: {response_text[:500]}"
+         logger.error(error_message)
+    except ValidationError as e:
+        processing_time = time.time() - start_time
+        error_message = f"Pydantic validation failed for classification: {e}. Response text: {response_text[:500]}"
+        logger.error(error_message)
+    except ValueError as e:
+         # Catch potential errors if response.text is accessed when blocked
+         processing_time = time.time() - start_time
+         error_message = f"Value error accessing response (likely blocked): {e}"
+         logger.warning(f"{error_message}. Feedback: {getattr(response, 'prompt_feedback', 'N/A')}")
     except google_exceptions.GoogleAPIError as e:
-         logger.error(f"Gemini API classification error: {e}")
+         processing_time = time.time() - start_time
          error_code = getattr(e, 'code', None)
          if error_code == 429 or "resource exhausted" in str(e).lower() or "rate limit" in str(e).lower():
+              error_message = "RATE_LIMIT_ERROR"
               logger.warning(f"Rate limit hit during classification.")
-              return None, "RATE_LIMIT_ERROR", time.time() - start_time
-         return None, f"Gemini API error: {e}", time.time() - start_time
+         else:
+            error_message = f"Gemini API error: {e}"
+            logger.error(f"Gemini API classification error: {e}")
     except Exception as e:
+        processing_time = time.time() - start_time
+        error_message = f"Unexpected error: {e}"
         logger.error(f"Unexpected error during classification: {e}", exc_info=True)
-        return None, f"Unexpected error: {e}", time.time() - start_time
+        
+    return classification_result, error_message, processing_time
 
 async def process_classification_task_async(trans_info: dict, semaphore: asyncio.Semaphore):
     """Async worker task for classifying one transcription."""
@@ -255,30 +260,37 @@ async def process_classification_task_async(trans_info: dict, semaphore: asyncio
             logger.warning(f"Rate limit hit for classification task {video_id}. Sleeping.")
             await asyncio.sleep(API_RETRY_DELAY * 2)
             status = 'rate_limit'
-            # No DB update
+            # Optionally update DB status to rate_limit here if needed
+            # db_update_func = functools.partial(
+            #     update_classification_status, video_id, transcription_id, status, 
+            #     model_used=MODEL_NAME, processing_time=proc_time, error_message=error
+            # )
+            # await loop.run_in_executor(None, db_update_func)
         elif error:
             logger.error(f"Failed to classify {video_id}: {error}")
             status = 'error'
             db_update_func = functools.partial(
                 update_classification_status, video_id, transcription_id, status, 
-                error_message=str(error)[:500], processing_time=proc_time, model_used=MODEL_NAME
+                model_used=MODEL_NAME, processing_time=proc_time, error_message=str(error)[:500]
             )
             await loop.run_in_executor(None, db_update_func)
-        elif classification_data:
+        elif classification_data: # Ensure data is not None
             logger.info(f"Successfully classified {video_id}.")
             status = 'success'
             db_update_func = functools.partial(
                 update_classification_status, video_id, transcription_id, status,
-                **classification_data, # Pass parsed dict as kwargs
-                processing_time=proc_time, model_used=MODEL_NAME
+                classification_data=classification_data, # Pass parsed dict
+                model_used=MODEL_NAME, processing_time=proc_time
             )
             await loop.run_in_executor(None, db_update_func)
         else:
-            logger.error(f"Classification returned no data and no error for {video_id}. Marking as error.")
+            # This case should ideally be covered by specific error checks above,
+            # but as a fallback if classification_data is None without a specific error captured.
+            logger.error(f"Classification returned no data and no specific error for {video_id}. Marking as error.")
             status = 'error'
             db_update_func = functools.partial(
                 update_classification_status, video_id, transcription_id, status,
-                error_message="Gemini returned no data or error", processing_time=proc_time, model_used=MODEL_NAME
+                model_used=MODEL_NAME, processing_time=proc_time, error_message="Gemini returned no data or error"
             )
             await loop.run_in_executor(None, db_update_func)
 
@@ -347,7 +359,7 @@ async def main():
     logger.info(f"\nClassification process finished.")
     logger.info(f"Successfully classified: {total_processed_count}")
     logger.info(f"Errors: {total_error_count}")
-    logger.info(f"Rate Limit Hits (not retried in this run): {rate_limit_hits}")
+    logger.info(f"Rate Limit Hits (optional DB update): {rate_limit_hits}")
 
 if __name__ == "__main__":
     try:

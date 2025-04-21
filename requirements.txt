@@ -4,6 +4,15 @@ google-auth-httplib2
 google-auth-oauthlib
 google-generativeai
 python-dotenv
+pydantic
+
+# Libraries for Perplexity API client and retries
+httpx>=0.27
+tenacity>=8.0
+
+# Libraries for Databricks integration (if running auth there)
+# azure-identity
+# azure-keyvault-secrets
 
 # Note: 
 # - Ensure ffmpeg is installed separately on your system if not already present.
