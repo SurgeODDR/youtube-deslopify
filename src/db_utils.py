@@ -94,6 +94,15 @@ def initialize_database():
     )
     """)
 
+    # Table for approved channels (based on classification score)
+    cursor.execute("""
+    CREATE TABLE IF NOT EXISTS approved_channels (
+        channel_id TEXT PRIMARY KEY,
+        channel_title TEXT,
+        first_approved_timestamp TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+    )
+    """)
+
     # --- NEW TABLES for Library Enhancer --- 
 
     # Table for Perplexity API requests and responses
@@ -139,6 +148,8 @@ def initialize_database():
     cursor.execute("CREATE INDEX IF NOT EXISTS idx_perplexity_requests_seed_url ON perplexity_requests(seed_channel_url)")
     # Index for faster lookup of gemini normalization requests by perplexity request id
     cursor.execute("CREATE INDEX IF NOT EXISTS idx_gemini_normalization_perplexity_id ON gemini_normalization_requests(perplexity_request_id)")
+    # Index for faster lookup of approved channels by channel_id (though PRIMARY KEY usually implies index)
+    cursor.execute("CREATE INDEX IF NOT EXISTS idx_approved_channels_channel_id ON approved_channels(channel_id)")
 
     conn.commit()
     conn.close()
