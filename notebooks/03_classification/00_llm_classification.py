@@ -37,7 +37,7 @@ except ImportError:
 
 # --- Configuration ---
 GEMINI_API_KEY = os.environ.get("GEMINI_API_KEY")
-MODEL_NAME = "gemini-1.5-pro-latest" # Use latest Pro model
+MODEL_NAME = "gemini-2.5-flash-preview-04-17" # Use latest Pro model
 MAX_CONCURRENT_TASKS = 50
 API_RETRY_DELAY = 5
 # ---
@@ -189,6 +189,7 @@ async def classify_transcription_gemini_async(transcription_text: str):
             generation_config=genai.types.GenerationConfig(
                 response_schema=ClassificationResult,
                 response_mime_type="application/json",
+                thinking_config=genai.types.ThinkingConfig(thinking_budget=5000)
             )
         )
         processing_time = time.time() - start_time

@@ -15,7 +15,7 @@ logger = logging.getLogger(__name__)
 # --- Configuration ---
 GEMINI_API_KEY = os.getenv("GEMINI_API_KEY")
 # Use the model name set by the user previously
-MODEL_NAME = "gemini-1.5-flash-latest" 
+MODEL_NAME = "gemini-2.5-flash-preview-04-17" 
 
 if not GEMINI_API_KEY:
     logger.warning("GEMINI_API_KEY not found in environment variables for llm_utils.")
