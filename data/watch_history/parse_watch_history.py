@@ -1,62 +1,104 @@
 #!/usr/bin/env python3
 
 import os
-from bs4 import BeautifulSoup
+# Removed BeautifulSoup import as it's no longer needed
+# from bs4 import BeautifulSoup 
 import json
 from datetime import datetime
 from collections import Counter
 
-def parse_watch_history(html_file):
+# def parse_watch_history(html_file):
+def parse_watch_history_json(json_file):
     """
-    Parse the YouTube watch history HTML file and extract relevant information.
+    # Parse the YouTube watch history HTML file and extract relevant information.
+    Parse the YouTube watch history JSON file and extract relevant information.
     Returns a list of dictionaries containing video information.
     """
-    with open(html_file, 'r', encoding='utf-8') as f:
-        soup = BeautifulSoup(f.read(), 'html.parser')
+    # with open(html_file, 'r', encoding='utf-8') as f:
+    #     soup = BeautifulSoup(f.read(), 'html.parser')
+    try:
+        with open(json_file, 'r', encoding='utf-8') as f:
+            data = json.load(f)
+    except json.JSONDecodeError as e:
+        print(f"Error decoding JSON: {e}")
+        return []
+    except FileNotFoundError:
+        print(f"Error: Input JSON file not found at {json_file}")
+        return []
 
     # Find all video entries
-    entries = soup.find_all('div', class_='content-cell mdl-cell mdl-cell--6-col mdl-typography--body-1')
+    # entries = soup.find_all('div', class_='content-cell mdl-cell mdl-cell--6-col mdl-typography--body-1')
     
     watch_history = []
     
-    for entry in entries:
+    # for entry in entries:
+    for entry in data:
         video_data = {}
         
         # Extract video title and URL
-        title_link = entry.find('a')
-        if title_link:
-            video_data['title'] = title_link.text.strip()
-            video_data['url'] = title_link.get('href', '')
+        # title_link = entry.find('a')
+        # if title_link:
+        #     video_data['title'] = title_link.text.strip()
+        #     video_data['url'] = title_link.get('href', '')
+        if entry.get('title') and entry.get('titleUrl'):
+            # Remove "Watched " prefix if present
+            video_data['title'] = entry['title'].replace('Watched ', '', 1).strip()
+            video_data['url'] = entry['titleUrl']
             
             # Extract video ID from URL if possible
             if 'watch?v=' in video_data['url']:
                 video_data['video_id'] = video_data['url'].split('watch?v=')[1].split('&')[0]
         
         # Extract channel information - updated to find all links and identify channel link
-        links = entry.find_all('a')
-        for link in links:
-            href = link.get('href', '')
-            text = link.text.strip()
-            # Skip empty text or single character channel names (likely parsing errors)
-            if not text or len(text) <= 1:
-                continue
-            # Skip if the link text is the same as the video title (to avoid duplicate entries)
-            if 'title' in video_data and text == video_data['title']:
-                continue
-            if '/channel/' in href or '/c/' in href or '/user/' in href:
-                video_data['channel'] = text
-                video_data['channel_url'] = href
-                if '/channel/' in href:
-                    video_data['channel_id'] = href.split('/channel/')[1]
-                break  # Stop after finding the first valid channel link
-        
+        # links = entry.find_all('a')
+        # for link in links:
+        #     href = link.get('href', '')
+        #     text = link.text.strip()
+        #     # Skip empty text or single character channel names (likely parsing errors)
+        #     if not text or len(text) <= 1:
+        #         continue
+        #     # Skip if the link text is the same as the video title (to avoid duplicate entries)
+        #     if 'title' in video_data and text == video_data['title']:
+        #         continue
+        #     if '/channel/' in href or '/c/' in href or '/user/' in href:
+        #         video_data['channel'] = text
+        #         video_data['channel_url'] = href
+        #         if '/channel/' in href:
+        #             video_data['channel_id'] = href.split('/channel/')[1]
+        #         break  # Stop after finding the first valid channel link
+        if entry.get('subtitles'):
+            subtitles = entry['subtitles']
+            if isinstance(subtitles, list) and len(subtitles) > 0:
+                channel_info = subtitles[0]
+                if channel_info.get('name') and channel_info.get('url'):
+                    video_data['channel'] = channel_info['name']
+                    video_data['channel_url'] = channel_info['url']
+                    # Attempt to extract channel ID from URL
+                    if '/channel/' in video_data['channel_url']:
+                         video_data['channel_id'] = video_data['channel_url'].split('/channel/')[1]
+                    elif '/c/' in video_data['channel_url']:
+                         # Channel ID might not be directly available for /c/ URLs
+                         video_data['channel_id'] = f"custom_url:{video_data['channel_url'].split('/c/')[1]}"
+                    elif '/user/' in video_data['channel_url']:
+                         # Channel ID might not be directly available for /user/ URLs
+                         video_data['channel_id'] = f"user:{video_data['channel_url'].split('/user/')[1]}"
+
         # Extract timestamp
-        timestamp = entry.find('div', {'class': 'content-cell mdl-cell mdl-cell--12-col mdl-typography--caption'})
-        if timestamp:
-            video_data['timestamp'] = timestamp.text.strip()
+        # timestamp = entry.find('div', {'class': 'content-cell mdl-cell mdl-cell--12-col mdl-typography--caption'})
+        # if timestamp:
+        #     video_data['timestamp'] = timestamp.text.strip()
+        if entry.get('time'):
+             video_data['timestamp'] = entry['time'] # Already in ISO format
             
-        if video_data and 'channel' in video_data:  # Only append if we found both video and channel data
+        # if video_data and 'channel' in video_data:  # Only append if we found both video and channel data
+        #     watch_history.append(video_data)
+        # Only append if we have title, url, and channel info
+        if all(k in video_data for k in ('title', 'url', 'channel', 'channel_url', 'timestamp')):
             watch_history.append(video_data)
+        else:
+            # Optionally log entries that are missing essential data
+            # print(f"Skipping entry due to missing data: {entry}")
+            pass
     
     return watch_history
 
@@ -149,16 +191,20 @@ def main():
     current_dir = os.path.dirname(os.path.abspath(__file__))
     
     # Input and output paths
-    input_file = os.path.join(current_dir, 'watch-history.html')
+    # input_file = os.path.join(current_dir, 'watch-history.html')
+    input_file = os.path.join(current_dir, 'watch-history.json') # Updated input filename
     
     if not os.path.exists(input_file):
-        print(f"Error: Could not find watch history file at {input_file}")
+        # print(f"Error: Could not find watch history file at {input_file}")
+        print(f"Error: Could not find watch history JSON file at {input_file}") # Updated error message
         return
     
-    print("Parsing watch history...")
-    watch_history = parse_watch_history(input_file)
+    # print("Parsing watch history...")
+    print("Parsing watch history JSON...") # Updated print message
+    # watch_history = parse_watch_history(input_file)
+    watch_history = parse_watch_history_json(input_file) # Updated function call
     
-    print(f"Found {len(watch_history)} video entries")
+    print(f"Found {len(watch_history)} valid video entries") # Updated print message
     
     # Save the data and generate statistics
     json_path, stats_path = save_data(watch_history, current_dir)

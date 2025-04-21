@@ -1,0 +1,19 @@
+---
+description:
+globs:
+alwaysApply: false
+---
+# Project Overview & Workflow
+
+This project aims to identify potentially low-quality ("slop") YouTube content by processing watch history, analyzing video metadata, and using AI for transcription and classification.
+
+**Core Workflow:**
+
+1.  **Ingestion:** Process watch history (`data/watch_history/`) to identify frequently watched channels ([`notebooks/01_ingestion/00_youtube_ingestion.py`](mdc:notebooks/01_ingestion/00_youtube_ingestion.py)).
+2.  **Metadata Fetch:** Get video details (ID, title, duration) for channels via YouTube API ([`notebooks/01_ingestion/01_youtube_video_download.py`](mdc:notebooks/01_ingestion/01_youtube_video_download.py)). (Note: Does not download video files).
+3.  **Transcription:** Transcribe videos using YouTube URLs and the Gemini API ([`notebooks/02_transcription/00_gemini_transcription.py`](mdc:notebooks/02_transcription/00_gemini_transcription.py)).
+4.  **Classification:** Classify transcriptions for suitability using the Gemini API ([`notebooks/03_classification/00_llm_classification.py`](mdc:notebooks/03_classification/00_llm_classification.py)).
+5.  **(Optional) Library Enhancement:** Find similar high-quality channels using Perplexity and Gemini APIs ([`src/library_enhancer.py`](mdc:src/library_enhancer.py)).
+6.  Repeat steps 2-4 for newly discovered channels.
+
+**Key Technologies:** Python, SQLite, Google Gemini API, Perplexity API.
